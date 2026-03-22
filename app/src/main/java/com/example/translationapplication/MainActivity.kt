@@ -20,16 +20,23 @@ import com.example.translationapplication.ui.theme.TranslationApplicationTheme
 import okhttp3.*
 import okio.ByteString
 import java.io.ByteArrayOutputStream
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import android.net.Uri
+import android.provider.Settings
 
 class MainActivity : ComponentActivity() {
-
+    private val translatedTexts = mutableStateOf<List<String>>(emptyList())
     private lateinit var mediaProjectionManager: MediaProjectionManager
     private var mediaProjection: MediaProjection? = null
     private lateinit var imageReader: ImageReader
     private var webSocket: WebSocket? = null
 
     private var lastSentTime = 0L
-    private val sendIntervalMs = 1000L
+    private val sendIntervalMs = 200L
 
     private var waitingForResponse = false
 
@@ -56,11 +63,17 @@ class MainActivity : ComponentActivity() {
         mediaProjectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
+        if (!Settings.canDrawOverlays(this)) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        }
+
         setContent {
             TranslationApplicationTheme {
-                AppUI {
-                    startScreenCapture()
-                }
+                AppUI(onStart = { startScreenCapture() })
             }
         }
     }
@@ -72,7 +85,7 @@ class MainActivity : ComponentActivity() {
 
     private fun setupWebSocket() {
         val client = OkHttpClient.Builder()
-            .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS) // no timeout
+            .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
             .build()
 
         val request = Request.Builder().url("ws://172.20.10.5:8000/ws").build()
@@ -84,17 +97,40 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                waitingForResponse = false // ready to send next frame
+                waitingForResponse = false
                 runOnUiThread {
                     try {
                         val jsonArray = org.json.JSONArray(text)
-                        val translations = mutableListOf<String>()
+                        val items = mutableListOf<TranslationItem>()
                         for (i in 0 until jsonArray.length()) {
-                            translations.add(jsonArray.getString(i))
+                            val obj = jsonArray.getJSONObject(i)
+                            val box = obj.getJSONArray("box")
+                            val x1 = box.getJSONArray(0).getDouble(0).toFloat()
+                            val y1 = box.getJSONArray(0).getDouble(1).toFloat()
+                            val x2 = box.getJSONArray(2).getDouble(0).toFloat()
+                            val y2 = box.getJSONArray(2).getDouble(1).toFloat()
+                            val translated = obj.getString("translated")
+                            items.add(TranslationItem(x1, y1, x2, y2, translated))
                         }
-                        println("Translated: $translations")
+
+                        // Build JSON string to pass to OverlayService
+                        val jsonItems = org.json.JSONArray()
+                        for (item in items) {
+                            val o = org.json.JSONObject()
+                            o.put("x1", item.x1)
+                            o.put("y1", item.y1)
+                            o.put("x2", item.x2)
+                            o.put("y2", item.y2)
+                            o.put("translated", item.translated)
+                            jsonItems.put(o)
+                        }
+
+                        val overlayIntent = Intent(this@MainActivity, OverlayService::class.java)
+                        overlayIntent.putExtra("items_json", jsonItems.toString())
+                        startService(overlayIntent)
+
                     } catch (e: Exception) {
-                        println("Failed to parse response: ${e.message}")
+                        println("Failed to parse: ${e.message}")
                     }
                 }
             }
@@ -180,8 +216,14 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppUI(onStart: () -> Unit) {
-    Button(onClick = { onStart() }) {
-        Text("Start Translation")
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Button(onClick = { onStart() }) {
+            Text("Start Translation")
+        }
     }
 }
 
@@ -189,6 +231,6 @@ fun AppUI(onStart: () -> Unit) {
 @Composable
 fun PreviewUI() {
     TranslationApplicationTheme {
-        AppUI {}
+        AppUI(onStart = {})
     }
 }
