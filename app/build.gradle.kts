@@ -32,6 +32,9 @@ android {
 }
 
 dependencies {
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
+    implementation("androidx.compose.material:material-icons-extended:1.6.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:latest.release")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okio:okio:3.6.0")
     implementation("org.slf4j:slf4j-simple:2.0.9")
