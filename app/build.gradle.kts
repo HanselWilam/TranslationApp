@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.example.translationapplication"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.translationapplication"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
     }
 
     buildTypes {
@@ -32,12 +32,14 @@ android {
 }
 
 dependencies {
-    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
+    val cameraVersion = "1.6.1"
+    implementation("androidx.camera:camera-core:${cameraVersion}")
+    implementation("androidx.camera:camera-camera2:${cameraVersion}")
+    implementation("androidx.camera:camera-lifecycle:${cameraVersion}")
+    implementation("androidx.camera:camera-view:${cameraVersion}")
     implementation("androidx.compose.material:material-icons-extended:1.6.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:latest.release")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okio:okio:3.6.0")
-    implementation("org.slf4j:slf4j-simple:2.0.9")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
