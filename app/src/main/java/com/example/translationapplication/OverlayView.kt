@@ -23,7 +23,6 @@ class OverlayView(context: Context) : View(context) {
     private val boxPaint = Paint().apply {
         style = Paint.Style.FILL
         isAntiAlias = true
-        // 🔧 FIXED: Changed alpha from 220 to 255 (fully opaque) to completely hide Japanese text
         color = Color.argb(255, 20, 20, 20)
     }
 
@@ -79,7 +78,6 @@ class OverlayView(context: Context) : View(context) {
 
         if (right - left < 5f || bottom - top < 5f) return
 
-        // 🔧 FIXED: Added padding to the bounding box to ensure the original text is fully eclipsed
         val padX = 8f
         val padY = 6f
         val rect = RectF(left - padX, top - padY, right + padX, bottom + padY)
@@ -101,7 +99,6 @@ class OverlayView(context: Context) : View(context) {
         val textHeight = textPaint.descent() - textPaint.ascent()
         val textY = top - padY + (boxHeight - textHeight) / 2f - textPaint.ascent()
 
-        // 🔧 FIXED: Added padding offset to text drawing
         canvas.drawText(block.translated, left - padX + 8f, textY, textPaint)
     }
 }

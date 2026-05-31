@@ -80,7 +80,6 @@ class MainActivity : ComponentActivity() {
                         result.resultCode, result.data!!
                     )
                     val metrics = resources.displayMetrics
-                    // 🔧 FIXED: Match 1:1 full resolution to eliminate coordinate stretching
                     overlayManager.show(metrics.widthPixels, metrics.heightPixels)
                     startCapture()
                 }, 500)
@@ -122,14 +121,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectWebSocket(srcLang: String, tgtLang: String) {
-        // URL must be base path only
         val url = "ws://$SERVER_IP:8000/ws"
-        println("🔗 Connecting to $url")
+        println("Connecting to $url")
 
         val request = Request.Builder().url(url).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
-                // Send the handshake JSON immediately after opening
                 val handshake = """{"type": "language_pair", "sourceLang": "$srcLang", "targetLang": "$tgtLang"}"""
                 webSocket.send(handshake)
 
@@ -150,7 +147,7 @@ class MainActivity : ComponentActivity() {
                 t: Throwable,
                 response: Response?
             ) {
-                println("❌ WebSocket error: ${t.message}")
+                println("WebSocket error: ${t.message}")
                 Handler(Looper.getMainLooper()).post {
                     statusMessage.value = "Connection failed: ${t.message}"
                     isTranslating.value = false
@@ -158,7 +155,7 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
-                println("⚠️ WebSocket closed: $reason")
+                println("WebSocket closed: $reason")
                 Handler(Looper.getMainLooper()).post {
                     statusMessage.value = "Disconnected"
                     isTranslating.value = false
@@ -189,14 +186,14 @@ class MainActivity : ComponentActivity() {
                     listOf(pt.getDouble(0).toFloat(), pt.getDouble(1).toFloat())
                 }
                 blocks.add(TranslationBlock(box, translated))
-                println("✅ Block: $translated")
+                println("Block: $translated")
             }
 
             overlayManager.updateBlocks(blocks)
             statusMessage.value = "Showing ${blocks.size} translations"
 
         } catch (e: Exception) {
-            println("❌ Parse error: ${e.message}")
+            println("Parse error: ${e.message}")
         }
     }
 
@@ -260,9 +257,8 @@ class MainActivity : ComponentActivity() {
 
                 val bitmap = Bitmap.createBitmap(fullBitmap, 0, 0, metrics.widthPixels, metrics.heightPixels)
 
-                // 🔧 FIXED: Removed Bitmap.createScaledBitmap downsizing to preserve original, unblurred text edges.
                 val stream = java.io.ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream) // Quality bumped to 80 for clear OCR boundaries
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
                 val jpegBytes = stream.toByteArray()
 
                 val midPoint = jpegBytes.size / 2
@@ -278,10 +274,10 @@ class MainActivity : ComponentActivity() {
                 lastBitmapHash = newHash
 
                 val sent = webSocket?.send(jpegBytes.toByteString())
-                println("📤 Sent ${jpegBytes.size} bytes (${metrics.widthPixels}x${metrics.heightPixels}), success=$sent")
+                println("Sent ${jpegBytes.size} bytes (${metrics.widthPixels}x${metrics.heightPixels}), success=$sent")
 
             } catch (e: Exception) {
-                println("❌ Capture error: ${e.message}")
+                println("Capture error: ${e.message}")
                 try { image.close() } catch (_: Exception) {}
             } finally {
                 isProcessingFrame = false
@@ -400,7 +396,7 @@ fun AppUI(
 
             if (selectedSourceLang == selectedTargetLang) {
                 Text(
-                    "⚠️ Source and target language are the same",
+                    "Source and target language are the same",
                     color = Color.Red,
                     fontSize = 12.sp
                 )

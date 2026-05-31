@@ -18,8 +18,6 @@ class OverlayManager(private val context: Context) {
         mainHandler.post {
             if (overlayView != null) return@post
 
-            // 🔧 FIXED: Added FLAG_LAYOUT_NO_LIMITS so the overlay expands completely over
-            // the status and nav bars, ensuring 1:1 coordinate alignment with screenshots.
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
