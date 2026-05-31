@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.example.translationapplication"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.translationapplication"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
     }
 
     buildTypes {
@@ -32,12 +32,11 @@ android {
 }
 
 dependencies {
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
     implementation("androidx.compose.material:material-icons-extended:1.6.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:latest.release")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okio:okio:3.6.0")
-    implementation("org.slf4j:slf4j-simple:2.0.9")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -46,6 +45,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.material3)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

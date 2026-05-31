@@ -9,26 +9,45 @@ import android.os.IBinder
 
 class ScreenCaptureService : Service() {
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val channelId = "screen_capture_channel"
-        val channel = NotificationChannel(
-            channelId,
-            "Screen Capture",
-            NotificationManager.IMPORTANCE_LOW
-        )
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+    companion object {
+        const val CHANNEL_ID = "ScreenCaptureChannel"
+        const val NOTIFICATION_ID = 1
+    }
 
-        val notification = Notification.Builder(this, channelId)
-            .setContentTitle("Translation Running")
-            .setContentText("Capturing screen for translation")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val notification = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("Screen Translation")
+            .setContentText("Translating screen content...")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
             .build()
 
-        startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-
-        return START_STICKY
+        startForeground(NOTIFICATION_ID, notification)
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Screen Capture Service",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Used for screen translation overlay"
+            setShowBadge(false)
+        }
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
+    }
 }
