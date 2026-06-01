@@ -22,13 +22,14 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -36,14 +37,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.translationapplication.ui.theme.BackgroundWhite
-import com.example.translationapplication.ui.theme.PrimaryBlue
 import com.example.translationapplication.ui.theme.TranslationApplicationTheme
 import java.io.ByteArrayOutputStream
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 
 data class LanguageOption(val code: String, val label: String)
 
@@ -58,14 +60,18 @@ class MainActivity : ComponentActivity() {
     @Volatile private var sourceLang: String = "ja"
     @Volatile private var targetLang: String = "en"
 
-    private var lastSentTime = 0L
+    private var lastCheckTime = 0L
+    private var lastStableTime = 0L
     private var lastFramePixels: IntArray? = null
-    private val captureIntervalMs = 1500L
+
+    private val checkIntervalMs = 300L
+    private val settleLatencyMs = 1500L
+
     private var isTranslationPaused = false
     private var floatingWidget: FloatingControlWidget? = null
 
     private fun hasScreenChanged(bitmap: Bitmap): Boolean {
-        val smallBitmap = Bitmap.createScaledBitmap(bitmap, 32, 32, true)
+        val smallBitmap = bitmap.scale(32, 32, true)
         val currentPixels = IntArray(32 * 32)
         smallBitmap.getPixels(currentPixels, 0, 32, 0, 0, 32, 32)
 
@@ -84,13 +90,13 @@ class MainActivity : ComponentActivity() {
             val gDiff = kotlin.math.abs(android.graphics.Color.green(p1) - android.graphics.Color.green(p2))
             val bDiff = kotlin.math.abs(android.graphics.Color.blue(p1) - android.graphics.Color.blue(p2))
 
-            if ((rDiff + gDiff + bDiff) > 60) {
+            if ((rDiff + gDiff + bDiff) > 80) {
                 significantPixelChanges++
             }
         }
 
         lastFramePixels = currentPixels
-        return significantPixelChanges > (1024 * 0.04)
+        return significantPixelChanges > 60
     }
 
     private val startCaptureLauncher =
@@ -139,7 +145,9 @@ class MainActivity : ComponentActivity() {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
             val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -177,12 +185,16 @@ class MainActivity : ComponentActivity() {
             val image = imageReader.acquireLatestImage() ?: return@setOnImageAvailableListener
             val now = SystemClock.elapsedRealtime()
 
-            // Send 1 frame every 1.5 s and app not paused
-            if (now - lastSentTime < captureIntervalMs || isTranslationPaused) {
+            if (isTranslationPaused) {
                 image.close()
                 return@setOnImageAvailableListener
             }
-            lastSentTime = now
+
+            if (now - lastCheckTime < checkIntervalMs) {
+                image.close()
+                return@setOnImageAvailableListener
+            }
+            lastCheckTime = now
 
             val plane = image.planes[0]
             val buffer = plane.buffer
@@ -190,27 +202,29 @@ class MainActivity : ComponentActivity() {
             val rowStride = plane.rowStride
             val rowPadding = rowStride - pixelStride * width
 
-            val bitmap = Bitmap.createBitmap(
-                width + rowPadding / pixelStride,
-                height,
-                Bitmap.Config.ARGB_8888
-            )
+            val bitmap = createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
             bitmap.copyPixelsFromBuffer(buffer)
             image.close()
 
             val croppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, width, height)
 
-            if (!hasScreenChanged(croppedBitmap)) {
-                return@setOnImageAvailableListener
+            val screenChanged = hasScreenChanged(croppedBitmap)
+
+            if (screenChanged) {
+                lastStableTime = now
+                runOnUiThread { viewOverlay.clearBoxes() }
+            } else {
+                if (now - lastStableTime > settleLatencyMs) {
+
+                    val stream = ByteArrayOutputStream()
+                    croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+                    val byteArray = stream.toByteArray()
+
+                    webSocketManager.sendImage(byteArray)
+
+                    lastStableTime = now + 100000L
+                }
             }
-
-            runOnUiThread { viewOverlay.clearBoxes() }
-
-            val stream = ByteArrayOutputStream()
-            croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-            val byteArray = stream.toByteArray()
-
-            webSocketManager.sendImage(byteArray)
         }, backgroundHandler)
     }
 
@@ -238,7 +252,13 @@ class MainActivity : ComponentActivity() {
                 if (activeScreen == "camera") {
                     CameraTranslationScreen (
                         webSocketManager = webSocketManager,
-                        hasScreenChanged = ::hasScreenChanged,
+                        sourceLang = selectedSourceLang,
+                        targetLang = selectedTargetLang,
+                        onLanguageChange = { source, target ->
+                            selectedSourceLang = source
+                            selectedTargetLang = target
+                            webSocketManager.updateLanguagePair(source, target)
+                        },
                         onNavigateBack = { activeScreen = "home" }
                     )
                 } else {
@@ -274,10 +294,15 @@ fun AppUI(
 ) {
     val languageOptions = remember {
         listOf(
-            LanguageOption("ja", "Japanese"),
-            LanguageOption("zh", "Chinese"),
+            LanguageOption("id", "Bahasa Indonesia"),
+            LanguageOption("zh", "Chinese (Simplified)"),
             LanguageOption("en", "English"),
-            LanguageOption("id", "Bahasa Indonesia")
+            LanguageOption("fr", "French"),
+            LanguageOption("de", "German"),
+            LanguageOption("ja", "Japanese"),
+            LanguageOption("ko", "Korean"),
+            LanguageOption("es", "Spanish"),
+            LanguageOption("ru", "Russian"),
         )
     }
 
@@ -285,33 +310,42 @@ fun AppUI(
     val targetLabel = languageOptions.first { it.code == selectedTargetLang }.label
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("Translation App", color = Color.White, fontWeight = FontWeight.Bold) },
+                title = { Text("Translation App", fontWeight = FontWeight.Bold, fontSize = 24.sp) },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = PrimaryBlue,
-                    titleContentColor = Color.White
-                )
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                ),
+                modifier = Modifier.shadow(4.dp)
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = Color.White) {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 8.dp
+            ) {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                    icon = { Icon(Icons.Default.Home, contentDescription = "Screen") },
                     label = { Text("Screen") },
                     selected = true,
                     onClick = { },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = PrimaryBlue,
-                        selectedTextColor = PrimaryBlue,
-                        indicatorColor = Color(0xFFE3F2FD)
+                        selectedIconColor = MaterialTheme.colorScheme.primary,
+                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                        indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
                     )
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.PhotoCamera, contentDescription = "Camera") },
                     label = { Text("Camera") },
                     selected = false,
-                    onClick = onStartCamera
+                    onClick = onStartCamera,
+                    colors = NavigationBarItemDefaults.colors(
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 )
             }
         }
@@ -325,25 +359,29 @@ fun AppUI(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Screen Translation",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = PrimaryBlue
+                text = "Tap to Start",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.primary
             )
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             FloatingActionButton(
                 onClick = onStartScreen,
-                containerColor = PrimaryBlue,
-                modifier = Modifier.size(120.dp),
-                shape = CircleShape
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(110.dp),
+                shape = CircleShape,
+                elevation = FloatingActionButtonDefaults.elevation(
+                    defaultElevation = 6.dp,
+                    pressedElevation = 2.dp
+                )
             ) {
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Start Recording",
-                    tint = Color.White,
-                    modifier = Modifier.size(64.dp)
+                    contentDescription = "Start Translation",
+                    modifier = Modifier.size(56.dp)
                 )
             }
 
@@ -353,15 +391,9 @@ fun AppUI(
                 sourceLabel = sourceLabel,
                 targetLabel = targetLabel,
                 languageOptions = languageOptions,
-                onSourceSelected = { newSource ->
-                    onLanguageChange(newSource, selectedTargetLang)
-                },
-                onTargetSelected = { newTarget ->
-                    onLanguageChange(selectedSourceLang, newTarget)
-                },
-                onSwap = {
-                    onLanguageChange(selectedTargetLang, selectedSourceLang)
-                }
+                onSourceSelected = { newSource -> onLanguageChange(newSource, selectedTargetLang) },
+                onTargetSelected = { newTarget -> onLanguageChange(selectedSourceLang, newTarget) },
+                onSwap = { onLanguageChange(selectedTargetLang, selectedSourceLang) }
             )
         }
     }
@@ -378,32 +410,31 @@ fun LanguageSelectorRow(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
     ) {
         Box(modifier = Modifier.weight(1f)) {
             LanguageDropdownButton(
-                title = "Translate from",
                 selectedLabel = sourceLabel,
                 languageOptions = languageOptions,
                 onSelected = onSourceSelected
             )
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
-        IconButton(onClick = onSwap) {
+        IconButton(
+            onClick = onSwap,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        ) {
             Icon(
                 imageVector = Icons.Default.SwapHoriz,
                 contentDescription = "Swap languages",
-                tint = PrimaryBlue
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(28.dp)
             )
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
         Box(modifier = Modifier.weight(1f)) {
             LanguageDropdownButton(
-                title = "Translate to",
                 selectedLabel = targetLabel,
                 languageOptions = languageOptions,
                 onSelected = onTargetSelected
@@ -414,7 +445,6 @@ fun LanguageSelectorRow(
 
 @Composable
 fun LanguageDropdownButton(
-    title: String,
     selectedLabel: String,
     languageOptions: List<LanguageOption>,
     onSelected: (String) -> Unit
@@ -422,37 +452,43 @@ fun LanguageDropdownButton(
     var expanded by remember { mutableStateOf(false) }
 
     Box {
-        OutlinedButton(
+        Surface(
             onClick = { expanded = true },
-            modifier = Modifier.fillMaxWidth()
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    fontSize = 12.sp,
-                    color = Color.Gray
-                )
+            Column(
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp)
+            ) {
                 Text(
                     text = selectedLabel,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.Black
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2
                 )
             }
-            Icon(
-                imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = null,
-                tint = Color.Gray
-            )
         }
 
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
         ) {
             languageOptions.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option.label) },
+                    text = { Text(
+                        text = option.label,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )},
                     onClick = {
                         expanded = false
                         onSelected(option.code)

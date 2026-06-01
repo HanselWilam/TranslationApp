@@ -42,7 +42,7 @@ class FloatingControlWidget(
     }
 
     private fun setupView() {
-        val size = 140
+        val size = 160
         val padding = 35
 
         val background = GradientDrawable().apply {

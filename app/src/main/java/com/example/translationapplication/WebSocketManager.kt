@@ -22,7 +22,7 @@ class WebSocketManager(var onResultReceived: (String) -> Unit) {
         isReconnecting = true
 
         val request = Request.Builder()
-            .url("ws://192.168.0.106:8000/ws")
+            .url("ws://10.0.2.2:8000/ws")
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
