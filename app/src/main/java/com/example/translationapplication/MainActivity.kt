@@ -1,6 +1,5 @@
 package com.example.translationapplication
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -9,7 +8,8 @@ import android.hardware.display.DisplayManager
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
+import androidx.core.net.toUri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
@@ -63,6 +62,8 @@ class MainActivity : ComponentActivity() {
     private var lastCheckTime = 0L
     private var lastStableTime = 0L
     private var lastFramePixels: IntArray? = null
+    private var ignoreChangesUntil = 0L
+    private var stopReceiver: android.content.BroadcastReceiver? = null
 
     private val checkIntervalMs = 300L
     private val settleLatencyMs = 1500L
@@ -96,12 +97,16 @@ class MainActivity : ComponentActivity() {
         }
 
         lastFramePixels = currentPixels
+        if (SystemClock.elapsedRealtime() < ignoreChangesUntil) {
+            return false
+        }
+
         return significantPixelChanges > 60
     }
 
     private val startCaptureLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == Activity.RESULT_OK) {
+            if (result.resultCode == RESULT_OK) {
                 val serviceIntent = Intent(this, ScreenCaptureService::class.java)
                 startForegroundService(serviceIntent)
 
@@ -134,9 +139,9 @@ class MainActivity : ComponentActivity() {
 
     private fun startScreenCapture() {
         if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, "package:$packageName".toUri())
             startActivity(intent)
-            Toast.makeText(this, "Please grant overlay permission and try again", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Please allow overlay permission and try again", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -147,9 +152,14 @@ class MainActivity : ComponentActivity() {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                         WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+
             val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             windowManager.addView(viewOverlay, params)
         }
@@ -159,10 +169,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startCapture() {
-        val metrics = resources.displayMetrics
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val density = metrics.densityDpi
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val width: Int
+        val height: Int
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = windowManager.maximumWindowMetrics
+            width = metrics.bounds.width()
+            height = metrics.bounds.height()
+        } else {
+            @Suppress("DEPRECATION")
+            val metrics = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+            width = metrics.widthPixels
+            height = metrics.heightPixels
+        }
+
+        val density = resources.displayMetrics.densityDpi
 
         mediaProjection?.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
@@ -228,20 +252,53 @@ class MainActivity : ComponentActivity() {
         }, backgroundHandler)
     }
 
+    private fun stopScreenCapture() {
+        mediaProjection?.stop()
+        mediaProjection = null
+
+        if (viewOverlay.parent != null) {
+            val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            windowManager.removeView(viewOverlay)
+        }
+
+        floatingWidget?.remove()
+        floatingWidget = null
+
+        val serviceIntent = Intent(this, ScreenCaptureService::class.java)
+        stopService(serviceIntent)
+
+        Toast.makeText(this, "Translation Stopped", Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopReceiver?.let { unregisterReceiver(it) }
+        stopScreenCapture()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         viewOverlay = TranslationOverlay(this)
 
         webSocketManager = WebSocketManager { result ->
             Log.d("TRANSLATION_RAW", result)
             runOnUiThread {
                 viewOverlay.updateTranslation(result)
+                ignoreChangesUntil = SystemClock.elapsedRealtime() + 1500L
             }
         }
         webSocketManager.connect()
         webSocketManager.updateLanguagePair(sourceLang, targetLang)
+
+        stopReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                stopScreenCapture()
+            }
+        }
+        val filter = android.content.IntentFilter("com.example.translationapplication.STOP_CAPTURE")
+        androidx.core.content.ContextCompat.registerReceiver(this, stopReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
 
         setContent {
             TranslationApplicationTheme {
@@ -297,12 +354,12 @@ fun AppUI(
             LanguageOption("id", "Bahasa Indonesia"),
             LanguageOption("zh", "Chinese (Simplified)"),
             LanguageOption("en", "English"),
-            LanguageOption("fr", "French"),
-            LanguageOption("de", "German"),
+//            LanguageOption("fr", "French"),
+//            LanguageOption("de", "German"),
             LanguageOption("ja", "Japanese"),
             LanguageOption("ko", "Korean"),
-            LanguageOption("es", "Spanish"),
-            LanguageOption("ru", "Russian"),
+//            LanguageOption("es", "Spanish"),
+//            LanguageOption("ru", "Russian"),
         )
     }
 
@@ -469,7 +526,7 @@ fun LanguageDropdownButton(
             ) {
                 Text(
                     text = selectedLabel,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center,

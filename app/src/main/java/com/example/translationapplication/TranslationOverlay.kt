@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PorterDuff
-import android.os.Build
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -89,7 +88,8 @@ class TranslationOverlay(context: Context) : View(context) {
                 .build()
 
             val backgroundWidth = staticLayout.width + (boxPadding * 2)
-            val backgroundHeight = staticLayout.height + (boxPadding * 2)
+            val originalBoxHeight = box.bottom - box.top
+            val backgroundHeight = maxOf(staticLayout.height.toFloat(), originalBoxHeight) + (boxPadding * 2)
 
             canvas.drawRoundRect(
                 box.left,

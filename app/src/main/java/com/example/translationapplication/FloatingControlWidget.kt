@@ -1,5 +1,6 @@
 package com.example.translationapplication
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -15,6 +16,7 @@ import android.widget.ImageView
 import androidx.compose.ui.graphics.toArgb
 import com.example.translationapplication.ui.theme.PrimaryBlue
 
+@SuppressLint("ClickableViewAccessibility")
 class FloatingControlWidget(
     private val context: Context,
     private val onToggle: (Boolean) -> Unit
@@ -29,6 +31,7 @@ class FloatingControlWidget(
     private val collapseRunnable = Runnable { collapseWidget() }
 
     private lateinit var layoutParams: WindowManager.LayoutParams
+    private val widgetSize = 160
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
@@ -42,7 +45,6 @@ class FloatingControlWidget(
     }
 
     private fun setupView() {
-        val size = 160
         val padding = 35
 
         val background = GradientDrawable().apply {
@@ -58,7 +60,7 @@ class FloatingControlWidget(
         iconView.setColorFilter(Color.WHITE)
         iconView.setPadding(padding, padding, padding, padding)
 
-        frameLayout.addView(iconView, FrameLayout.LayoutParams(size, size))
+        frameLayout.addView(iconView, FrameLayout.LayoutParams(widgetSize, widgetSize))
 
         frameLayout.setOnClickListener {
             if (!isExpanded) {
@@ -97,6 +99,8 @@ class FloatingControlWidget(
     }
 
     private fun addToWindow() {
+        val metrics = context.resources.displayMetrics
+
         layoutParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -105,8 +109,8 @@ class FloatingControlWidget(
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 800
-            y = 800
+            x = metrics.widthPixels - widgetSize - 50
+            y = (metrics.heightPixels / 2) - 200
         }
 
         frameLayout.setOnTouchListener { v, event ->
@@ -160,5 +164,16 @@ class FloatingControlWidget(
         }
 
         windowManager.updateViewLayout(frameLayout, layoutParams)
+    }
+
+    fun remove() {
+        try {
+            if (frameLayout.parent != null) {
+                windowManager.removeView(frameLayout)
+            }
+            handler.removeCallbacks(collapseRunnable)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }

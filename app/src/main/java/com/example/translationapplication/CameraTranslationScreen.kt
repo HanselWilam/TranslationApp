@@ -122,7 +122,7 @@ fun CameraTranslationScreen(
     var showOriginal by remember { mutableStateOf(false) }
     var isHUDVisible by remember { mutableStateOf(true) }
 
-    var zoomScale by remember { mutableStateOf(1f) }
+    var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
 
@@ -134,12 +134,12 @@ fun CameraTranslationScreen(
             LanguageOption("id", "Bahasa Indonesia"),
             LanguageOption("zh", "Chinese (Simplified)"),
             LanguageOption("en", "English"),
-            LanguageOption("fr", "French"),
-            LanguageOption("de", "German"),
+//            LanguageOption("fr", "French"),
+//            LanguageOption("de", "German"),
             LanguageOption("ja", "Japanese"),
             LanguageOption("ko", "Korean"),
-            LanguageOption("es", "Spanish"),
-            LanguageOption("ru", "Russian"),
+//            LanguageOption("es", "Spanish"),
+//            LanguageOption("ru", "Russian"),
         )
     }
 
