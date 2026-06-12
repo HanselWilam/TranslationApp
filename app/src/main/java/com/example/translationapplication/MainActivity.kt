@@ -2,9 +2,11 @@ package com.example.translationapplication
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -29,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -56,6 +59,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var webSocketManager: WebSocketManager
     private lateinit var viewOverlay: TranslationOverlay
 
+    private var virtualDisplay: VirtualDisplay? = null
+    private var captureThread: HandlerThread? = null
+    private var captureHandler: Handler? = null
+
     @Volatile private var sourceLang: String = "ja"
     @Volatile private var targetLang: String = "en"
 
@@ -69,6 +76,7 @@ class MainActivity : ComponentActivity() {
     private val settleLatencyMs = 1500L
 
     private var isTranslationPaused = false
+    private val isCaptureRunning = mutableStateOf(false)
     private var floatingWidget: FloatingControlWidget? = null
 
     private fun hasScreenChanged(bitmap: Bitmap): Boolean {
@@ -91,7 +99,7 @@ class MainActivity : ComponentActivity() {
             val gDiff = kotlin.math.abs(android.graphics.Color.green(p1) - android.graphics.Color.green(p2))
             val bDiff = kotlin.math.abs(android.graphics.Color.blue(p1) - android.graphics.Color.blue(p2))
 
-            if ((rDiff + gDiff + bDiff) > 80) {
+            if ((rDiff + gDiff + bDiff) > 100) {
                 significantPixelChanges++
             }
         }
@@ -101,7 +109,97 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
-        return significantPixelChanges > 60
+        return significantPixelChanges > 80
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (mediaProjection != null && isCaptureRunning.value) {
+            setupVirtualDisplay()
+            runOnUiThread { viewOverlay.clearBoxes() }
+        }
+    }
+
+    private fun setupVirtualDisplay() {
+        virtualDisplay?.release()
+        if (this::imageReader.isInitialized) {
+            imageReader.close()
+        }
+
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val width: Int
+        val height: Int
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = windowManager.currentWindowMetrics
+            width = metrics.bounds.width()
+            height = metrics.bounds.height()
+        } else {
+            @Suppress("DEPRECATION")
+            val metrics = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+            width = metrics.widthPixels
+            height = metrics.heightPixels
+        }
+
+        val density = resources.displayMetrics.densityDpi
+
+        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+
+        virtualDisplay = mediaProjection?.createVirtualDisplay(
+            "ScreenCapture", width, height, density,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader.surface, null, null
+        )
+
+        if (captureThread == null) {
+            captureThread = HandlerThread("ImageReaderThread").apply { start() }
+            captureHandler = Handler(captureThread!!.looper)
+        }
+
+        imageReader.setOnImageAvailableListener({
+            val image = imageReader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            val now = SystemClock.elapsedRealtime()
+
+            if (isTranslationPaused) {
+                image.close()
+                return@setOnImageAvailableListener
+            }
+
+            if (now - lastCheckTime < checkIntervalMs) {
+                image.close()
+                return@setOnImageAvailableListener
+            }
+            lastCheckTime = now
+
+            val plane = image.planes[0]
+            val buffer = plane.buffer
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val rowPadding = rowStride - pixelStride * width
+
+            val bitmap = createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
+            bitmap.copyPixelsFromBuffer(buffer)
+            image.close()
+
+            val croppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, width, height)
+            val screenChanged = hasScreenChanged(croppedBitmap)
+
+            if (screenChanged) {
+                lastStableTime = now
+                runOnUiThread { viewOverlay.clearBoxes() }
+            } else {
+                if (now - lastStableTime > settleLatencyMs) {
+                    val stream = ByteArrayOutputStream()
+                    croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 65, stream)
+                    val byteArray = stream.toByteArray()
+
+                    webSocketManager.sendImage(byteArray)
+                    lastStableTime = now + 100000L
+                }
+            }
+        }, captureHandler)
     }
 
     private val startCaptureLauncher =
@@ -123,6 +221,7 @@ class MainActivity : ComponentActivity() {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     startActivity(homeIntent)
+                    isCaptureRunning.value = true
 
                     if (floatingWidget == null && Settings.canDrawOverlays(this@MainActivity)) {
                         floatingWidget = FloatingControlWidget(this@MainActivity) { isPlaying ->
@@ -169,87 +268,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startCapture() {
-        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val width: Int
-        val height: Int
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val metrics = windowManager.maximumWindowMetrics
-            width = metrics.bounds.width()
-            height = metrics.bounds.height()
-        } else {
-            @Suppress("DEPRECATION")
-            val metrics = android.util.DisplayMetrics()
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.getRealMetrics(metrics)
-            width = metrics.widthPixels
-            height = metrics.heightPixels
-        }
-
-        val density = resources.displayMetrics.densityDpi
-
         mediaProjection?.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
-                imageReader.close()
+                if (this@MainActivity::imageReader.isInitialized) {
+                    imageReader.close()
+                }
+                virtualDisplay?.release()
             }
         }, Handler(Looper.getMainLooper()))
 
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        mediaProjection?.createVirtualDisplay(
-            "ScreenCapture", width, height, density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader.surface, null, null
-        )
-
-        val handlerThread = HandlerThread("ImageReaderThread")
-        handlerThread.start()
-        val backgroundHandler = Handler(handlerThread.looper)
-
-        imageReader.setOnImageAvailableListener({
-            val image = imageReader.acquireLatestImage() ?: return@setOnImageAvailableListener
-            val now = SystemClock.elapsedRealtime()
-
-            if (isTranslationPaused) {
-                image.close()
-                return@setOnImageAvailableListener
-            }
-
-            if (now - lastCheckTime < checkIntervalMs) {
-                image.close()
-                return@setOnImageAvailableListener
-            }
-            lastCheckTime = now
-
-            val plane = image.planes[0]
-            val buffer = plane.buffer
-            val pixelStride = plane.pixelStride
-            val rowStride = plane.rowStride
-            val rowPadding = rowStride - pixelStride * width
-
-            val bitmap = createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
-            bitmap.copyPixelsFromBuffer(buffer)
-            image.close()
-
-            val croppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, width, height)
-
-            val screenChanged = hasScreenChanged(croppedBitmap)
-
-            if (screenChanged) {
-                lastStableTime = now
-                runOnUiThread { viewOverlay.clearBoxes() }
-            } else {
-                if (now - lastStableTime > settleLatencyMs) {
-
-                    val stream = ByteArrayOutputStream()
-                    croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-                    val byteArray = stream.toByteArray()
-
-                    webSocketManager.sendImage(byteArray)
-
-                    lastStableTime = now + 100000L
-                }
-            }
-        }, backgroundHandler)
+        setupVirtualDisplay()
     }
 
     private fun stopScreenCapture() {
@@ -266,6 +294,8 @@ class MainActivity : ComponentActivity() {
 
         val serviceIntent = Intent(this, ScreenCaptureService::class.java)
         stopService(serviceIntent)
+
+        isCaptureRunning.value = false
 
         Toast.makeText(this, "Translation Stopped", Toast.LENGTH_SHORT).show()
     }
@@ -295,6 +325,7 @@ class MainActivity : ComponentActivity() {
         stopReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 stopScreenCapture()
+                isCaptureRunning.value = false
             }
         }
         val filter = android.content.IntentFilter("com.example.translationapplication.STOP_CAPTURE")
@@ -322,13 +353,18 @@ class MainActivity : ComponentActivity() {
                     AppUI(
                         selectedSourceLang = selectedSourceLang,
                         selectedTargetLang = selectedTargetLang,
+                        isCaptureRunning = isCaptureRunning.value,
                         onLanguageChange = { source, target ->
                             selectedSourceLang = source
                             selectedTargetLang = target
                             webSocketManager.updateLanguagePair(source, target)
                         },
-                        onStartScreen = {
-                            startScreenCapture()
+                        onToggleScreenCapture = {
+                            if (isCaptureRunning.value) {
+                                stopScreenCapture()
+                            } else {
+                                startScreenCapture()
+                            }
                         },
                         onStartCamera = {
                             activeScreen = "camera"
@@ -345,8 +381,9 @@ class MainActivity : ComponentActivity() {
 fun AppUI(
     selectedSourceLang: String,
     selectedTargetLang: String,
+    isCaptureRunning: Boolean,
     onLanguageChange: (String, String) -> Unit,
-    onStartScreen: () -> Unit,
+    onToggleScreenCapture: () -> Unit,
     onStartCamera: () -> Unit
 ) {
     val languageOptions = remember {
@@ -416,7 +453,7 @@ fun AppUI(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Tap to Start",
+                text = if (isCaptureRunning) "Tap to Stop" else "Tap to Start",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.primary
@@ -425,7 +462,7 @@ fun AppUI(
             Spacer(modifier = Modifier.height(24.dp))
 
             FloatingActionButton(
-                onClick = onStartScreen,
+                onClick = onToggleScreenCapture,
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.size(110.dp),
@@ -436,8 +473,8 @@ fun AppUI(
                 )
             ) {
                 Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Start Translation",
+                    imageVector = if (isCaptureRunning) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isCaptureRunning) "Stop Translation" else "Start Translation",
                     modifier = Modifier.size(56.dp)
                 )
             }

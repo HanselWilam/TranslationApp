@@ -75,9 +75,7 @@ class TranslationOverlay(context: Context) : View(context) {
 
         for (box in textBoxes) {
             val baseBoxWidth = (box.right - box.left)
-            val maxAllowedWidth = baseBoxWidth + 250f
-            val screenRightBound = width - box.left - (boxPadding * 2)
-            val finalMaxWidth = maxOf(50, minOf(maxAllowedWidth.toInt(), screenRightBound.toInt()))
+            val finalMaxWidth = maxOf(50, baseBoxWidth.toInt() + (boxPadding.toInt() * 2))
 
             val staticLayout = StaticLayout.Builder.obtain(
                 box.text, 0, box.text.length, textPaint, finalMaxWidth
@@ -87,9 +85,13 @@ class TranslationOverlay(context: Context) : View(context) {
                 .setIncludePad(false)
                 .build()
 
+            var actualTextWidth = 0f
+            for (i in 0 until staticLayout.lineCount) {
+                actualTextWidth = maxOf(actualTextWidth, staticLayout.getLineWidth(i))
+            }
+
             val backgroundWidth = staticLayout.width + (boxPadding * 2)
-            val originalBoxHeight = box.bottom - box.top
-            val backgroundHeight = maxOf(staticLayout.height.toFloat(), originalBoxHeight) + (boxPadding * 2)
+            val backgroundHeight = staticLayout.height.toFloat() + (boxPadding * 2)
 
             canvas.drawRoundRect(
                 box.left,

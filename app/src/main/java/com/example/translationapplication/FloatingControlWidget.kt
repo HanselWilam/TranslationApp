@@ -157,7 +157,7 @@ class FloatingControlWidget(
         val screenWidth = context.resources.displayMetrics.widthPixels
         val widgetWidth = frameLayout.width.takeIf { it > 0 } ?: 140
 
-        layoutParams.x = if (layoutParams.x < screenWidth / 2) {
+        layoutParams.x = if (layoutParams.x + (widgetWidth / 2) < screenWidth / 2) {
             0
         } else {
             screenWidth - widgetWidth
